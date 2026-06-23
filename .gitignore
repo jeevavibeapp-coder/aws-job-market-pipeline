@@ -1,12 +1,44 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
-.env
 .venv/
 venv/
-*.zip
-reports/
-sample_data/demo.db
-*.log
-.DS_Store
+dist/
+*.egg
+.pytest_cache/
 *.pyc
+
+# Node
+node_modules/
+.next/
+.turbo/
+*.tsbuildinfo
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Docker
+docker-compose.override.yml
+
+# Uploads
+uploads/
+*.pdf
+*.docx
