@@ -114,7 +114,9 @@ def upsert_records(conn, records: list[dict]) -> int:
 
     with conn.cursor() as cur:
         for rec in records:
-            company = (rec.get("company") or "Unknown").strip()
+            # Strip first, THEN default: a whitespace-only value must become
+            # "Unknown", not an empty string in dim_company.
+            company = (rec.get("company") or "").strip() or "Unknown"
             if company not in company_cache:
                 cur.execute(UPSERT_COMPANY, (company,))
                 company_cache[company] = cur.fetchone()[0]

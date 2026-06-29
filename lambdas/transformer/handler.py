@@ -34,19 +34,44 @@ def _clean_str(val) -> str | None:
     return str(val).strip() or None
 
 
+# Number optionally with thousands separators / decimals, optionally followed by
+# a k/m magnitude suffix. Anchored on a leading digit so it never matches stray
+# letters. Replaces the old global ".replace('k','000')" which corrupted any
+# text containing a 'k' (e.g. "week" → "wee000").
+_SALARY_TOKEN = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*([kKmM])?")
+_NONE_SALARY = {"salary_min": None, "salary_max": None, "salary_avg": None}
+
+
 def _parse_salary(raw: str) -> dict:
     """Extract min / max / avg salary (USD) from free-text strings."""
     if not raw:
-        return {"salary_min": None, "salary_max": None, "salary_avg": None}
+        return dict(_NONE_SALARY)
 
-    nums = re.findall(r"[\d,]+", raw.replace("$", "").replace("k", "000"))
-    amounts = []
-    for n in nums:
-        with contextlib.suppress(ValueError):
-            amounts.append(float(n.replace(",", "")))
+    text = str(raw)
+    amounts: list[float] = []
+    for m in _SALARY_TOKEN.finditer(text):
+        start = m.start(1)
+        # Skip a unary minus (negative salary) but keep range dashes like
+        # "80000-100000" where a digit precedes the '-'.
+        if start > 0 and text[start - 1] == "-" and (start < 2 or not text[start - 2].isdigit()):
+            continue
+        try:
+            val = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        suffix = m.group(2)
+        if suffix in ("k", "K"):
+            val *= 1_000
+        elif suffix in ("m", "M"):
+            val *= 1_000_000
+        elif val < 1_000:
+            # A bare sub-1000 number is almost certainly not an annual salary
+            # ("40 hrs", "5+ years"); a real figure carries a k/m suffix or 4+ digits.
+            continue
+        amounts.append(val)
 
     if not amounts:
-        return {"salary_min": None, "salary_max": None, "salary_avg": None}
+        return dict(_NONE_SALARY)
 
     sal_min = min(amounts)
     sal_max = max(amounts)
@@ -60,17 +85,19 @@ def _parse_salary(raw: str) -> dict:
 def _parse_date(raw) -> str | None:
     if not raw:
         return None
-    if isinstance(raw, (int, float)):
-        try:
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        with contextlib.suppress(Exception):
             return datetime.fromtimestamp(raw, tz=UTC).isoformat()
-        except Exception:
-            pass
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(str(raw)[:19], fmt[: len(fmt)]).isoformat()
-        except ValueError:
-            pass
-    return str(raw)
+    s = str(raw).strip()
+    # ISO-8601 first (handles 'Z' and timezone offsets). The previous code sliced
+    # str(raw)[:19], which stripped the 'Z'/offset before strptime so every
+    # timezone-aware timestamp silently failed to parse.
+    with contextlib.suppress(ValueError):
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d", "%Y/%m/%d"):
+        with contextlib.suppress(ValueError):
+            return datetime.strptime(s, fmt).isoformat()
+    return s
 
 
 def _normalise(raw_record: dict, ingest_meta: dict) -> dict:

@@ -64,7 +64,8 @@ def _coercible(value: Any, expected: type) -> bool:
     if value is None:
         return True
     if expected is float:
-        return isinstance(value, (int, float))
+        # bool is a subclass of int — reject it explicitly for numeric fields.
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
     return isinstance(value, expected)
 
 
@@ -84,11 +85,15 @@ def validate_record(record: dict[str, Any], schema: dict = PROCESSED_SCHEMA) -> 
             )
 
     # Range / sanity checks for salary
-    smin, smax = record.get("salary_min"), record.get("salary_max")
+    smin, savg, smax = (record.get("salary_min"), record.get("salary_avg"), record.get("salary_max"))
     if isinstance(smin, (int, float)) and isinstance(smax, (int, float)) and smin > smax:
         problems.append(f"salary_min ({smin}) greater than salary_max ({smax})")
-    for label, val in (("salary_min", smin), ("salary_max", smax)):
-        if isinstance(val, (int, float)) and not (SALARY_MIN_BOUND <= val <= SALARY_MAX_BOUND):
+    for label, val in (("salary_min", smin), ("salary_avg", savg), ("salary_max", smax)):
+        if (
+            isinstance(val, (int, float))
+            and not isinstance(val, bool)
+            and not (SALARY_MIN_BOUND <= val <= SALARY_MAX_BOUND)
+        ):
             problems.append(f"{label} ({val}) outside plausible bounds")
 
     return problems

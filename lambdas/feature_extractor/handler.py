@@ -43,7 +43,7 @@ SKILL_PATTERNS: dict[str, list[str]] = {
     "airflow": [r"\bairflow\b", r"\bapache\s+airflow\b"],
     "dbt": [r"\bdbt\b", r"\bdata\s+build\s+tool\b"],
     "kafka": [r"\bkafka\b", r"\bapache\s+kafka\b"],
-    "docker": [r"\bdocker\b", r"\bcontainer\b"],
+    "docker": [r"\bdocker\b", r"\bcontaineri[sz]"],
     "kubernetes": [r"\bkubernetes\b", r"\bk8s\b"],
     "snowflake": [r"\bsnowflake\b"],
     "databricks": [r"\bdatabricks\b"],
