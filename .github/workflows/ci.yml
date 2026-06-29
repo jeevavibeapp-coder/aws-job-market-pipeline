@@ -16,6 +16,30 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
 
+    # Real Postgres so the serving-layer / analytics / reliability DB tests run
+    # in CI (they auto-skip locally when no database is reachable).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: jobmarket_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: jobmarket_test
+
     steps:
       - uses: actions/checkout@v4
 

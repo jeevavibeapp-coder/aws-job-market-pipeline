@@ -51,11 +51,37 @@ def _connect():
     return psycopg2.connect(connect_timeout=10, **_get_db_config())
 
 
-# Reporting-table refresh (idempotent: rebuild the snapshot for "today").
-REFRESH_SQL = [
-    "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_skill_demand_daily;",
-    "REFRESH MATERIALIZED VIEW CONCURRENTLY mv_salary_by_level;",
-]
+# Reporting materialized views refreshed each run.
+MATERIALIZED_VIEWS = ["mv_skill_demand_daily", "mv_salary_by_level"]
+
+
+def _refresh_materialized_views(conn) -> None:
+    """
+    Refresh each reporting MV, preferring CONCURRENTLY (non-blocking for readers).
+
+    A materialized view created WITH NO DATA has never been populated, and
+    Postgres rejects CONCURRENTLY on an unpopulated view. So on the first-ever
+    run we fall back to a plain (blocking) REFRESH, which populates it; every
+    subsequent run then uses CONCURRENTLY.
+    """
+    for mv in MATERIALIZED_VIEWS:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {mv};")
+            conn.commit()
+        except Exception as exc:  # noqa: BLE001 - first run / not yet populated
+            conn.rollback()
+            logger.warning(
+                "Concurrent refresh failed; retrying plain refresh",
+                extra={"ctx": {"mv": mv, "error": str(exc)}},
+            )
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(f"REFRESH MATERIALIZED VIEW {mv};")
+                conn.commit()
+            except Exception as exc2:  # noqa: BLE001 - e.g. no underlying data yet
+                conn.rollback()
+                logger.warning("Refresh skipped", extra={"ctx": {"mv": mv, "error": str(exc2)}})
 
 # Analytical queries that feed the generated insights.
 TOP_SKILLS_SQL = """
@@ -123,15 +149,8 @@ SET payload = EXCLUDED.payload, headline = EXCLUDED.headline, generated_at = now
 
 def generate_insights(conn) -> dict:
     out: dict = {"generated_at": datetime.now(UTC).isoformat()}
+    _refresh_materialized_views(conn)
     with conn.cursor() as cur:
-        for stmt in REFRESH_SQL:
-            try:
-                cur.execute(stmt)
-            except Exception as exc:  # noqa: BLE001 - first run may have no MV / no data
-                logger.warning("Refresh skipped", extra={"ctx": {"stmt": stmt, "error": str(exc)}})
-                conn.rollback()
-        conn.commit()
-
         cur.execute(TOP_SKILLS_SQL)
         out["top_skills"] = [{"skill": r[0], "demand": r[1]} for r in cur.fetchall()]
 
