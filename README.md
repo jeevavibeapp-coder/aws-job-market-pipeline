@@ -1,175 +1,177 @@
-# AWS Serverless Job Market Intelligence Pipeline
+# Real-Time Job Market Intelligence Data Platform
 
-A **fully serverless, event-driven AWS data pipeline** that ingests 100+ job listings daily, transforms and deduplicates them, extracts ML-ready features, and stores everything in a 3-tier partitioned S3 data lake queryable via Amazon Athena.
+[![CI](https://github.com/jeeva-s0604/aws-job-market-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/jeeva-s0604/aws-job-market-pipeline/actions/workflows/ci.yml)
+![python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
+
+A **production-grade, serverless, event-driven AWS data platform** that ingests
+job postings daily, lands them in a 3-tier S3 data lake, transforms / deduplicates
+/ enriches them through chained Lambdas, loads a **PostgreSQL star schema** behind
+a **data-quality gate**, tracks historical trends, and **auto-generates daily
+market insights** — all on a Free-Tier footprint.
+
+> Lake **and** warehouse: Amazon **Athena** queries the S3 lake directly;
+> **PostgreSQL/RDS** serves an indexed dimensional model for BI & reporting.
 
 ---
 
 ## Architecture
 
 ```
-EventBridge (daily cron)
-        │
-        ▼
-┌─────────────────┐   raw JSON    ┌─────────────────────────────────────┐
-│  Lambda         │ ──────────►  │  S3 Data Lake                       │
-│  (Ingestor)     │               │  raw/year=*/month=*/day=*/          │
-│  JSearch + LinkedIn APIs        │  processed/year=*/month=*/day=*/    │
-│  via Apify      │   S3 trigger  │  features/year=*/month=*/day=*/     │
-└─────────────────┘       │       └─────────────────────────────────────┘
-                           │                        │
-                  ┌────────▼────────┐               │ (Athena partition projection)
-                  │ Lambda          │               ▼
-                  │ (Transformer)   │        ┌────────────┐
-                  │ Normalise +     │        │   Amazon   │
-                  │ Deduplicate     │        │   Athena   │
-                  └────────┬────────┘        └────────────┘
-                           │ S3 trigger
-                  ┌────────▼────────┐
-                  │ Lambda          │
-                  │ (Feature        │
-                  │  Extractor)     │
-                  │ Skills + Level  │
-                  └─────────────────┘
+ EventBridge (06:00)        ┌────────────── S3 DATA LAKE ──────────────┐
+        │                   │ raw/  →  processed/  →  features/         │
+        ▼                   └───┬──────────┬──────────────┬────────────┘
+  ┌────────────┐  PutObject     │ event    │ event        │ event
+  │ Ingestor   │───────────────►│          │              │
+  └────────────┘            ┌───▼───┐  ┌───▼────────┐  ┌──▼──────────────┐
+   APIs (Apify/JSearch)     │Transf.│  │ Feature    │  │ Loader (PG)     │
+                            │+dedupe│  │ Extractor  │  │ DQ gate → upsert│
+                            └───────┘  └────────────┘  └──────┬──────────┘
+  ┌────────────┐                                              │
+  │  Athena    │◄── partition projection (lake SQL)           ▼
+  └────────────┘                                      ┌────────────────┐
+ EventBridge (08:00) ──► ┌────────────┐  refresh MVs  │ PostgreSQL/RDS │
+                         │ Insights   │──────────────►│ dims+facts+MVs │
+                         │ trends+SNS │   daily_insight└────────────────┘
+                         └────────────┘
+ Observability: JSON logs + EMF metrics → CloudWatch Alarms + Dashboard + SNS
 ```
 
----
-
-## Features
-
-| Feature | Detail |
-|---------|--------|
-| **Ingestion** | Fetches 100+ job records daily from JSearch + LinkedIn via Apify actors |
-| **3-Tier S3 Lake** | `raw/` → `processed/` → `features/` with `year/month/day` partitioning |
-| **Deduplication** | SHA-256 fingerprint + 30-day rolling window → 25–30% duplicate reduction |
-| **Schema Normalisation** | Unified field names, type casting, salary min/max/avg extraction |
-| **Feature Engineering** | Skill tokenisation (20+ skills), experience level, remote/hybrid/onsite |
-| **Athena Partition Projection** | No MSCK REPAIR needed; cost-efficient multi-month scans |
+Full write-up: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ·
+data model & partitioning: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) ·
+ops: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ---
 
-## Project Structure
+## What it does
+
+| Capability | How |
+|------------|-----|
+| **Ingest** | Daily EventBridge cron → Lambda pulls postings from APIs → `raw/` |
+| **3-tier data lake** | `raw/` → `processed/` → `features/`, `year/month/day` partitioned, S3 lifecycle |
+| **Transform** | Schema normalisation, salary min/max/avg parsing, SHA-256 dedup (30-day window) |
+| **Enrich** | Skill tokenisation (20+ skills), experience level, remote/hybrid/onsite |
+| **Data quality gate** | Schema/type/range/freshness checks; loads abort below 80% pass rate |
+| **Serving layer** | PostgreSQL Kimball star schema (fact + company/skill dims + bridge) |
+| **Reporting** | Materialized views (skill demand, salary by level), company leaderboard |
+| **Historical trends** | Weekly snapshots + `LAG()` window-function momentum |
+| **Auto insights** | Daily top/rising skills, salary bands, remote share → `daily_insight` + SNS |
+| **Lake SQL** | Athena partition projection — no Glue crawler, no `MSCK REPAIR` |
+| **Monitoring** | Structured JSON logs, EMF metrics, CloudWatch alarms + dashboard, SNS |
+| **CI/CD** | GitHub Actions: Ruff lint+format, pytest+coverage (3.11/3.12), packaging, OIDC deploy |
+
+---
+
+## Project structure
 
 ```
 aws-job-market-pipeline/
 ├── lambdas/
-│   ├── ingestor/           # Fetches raw jobs from APIs → S3 raw/
-│   │   ├── handler.py
-│   │   └── requirements.txt
-│   ├── transformer/        # Normalises + deduplicates → S3 processed/
-│   │   ├── handler.py
-│   │   └── requirements.txt
-│   └── feature_extractor/  # Skill / level / mode extraction → S3 features/
-│       ├── handler.py
-│       └── requirements.txt
-├── athena/
-│   └── create_tables.sql   # DDL with partition projection for all 3 tiers
+│   ├── common/              # shared: structured logging, EMF metrics, DQ validation
+│   ├── ingestor/            # APIs → raw/
+│   ├── transformer/         # normalise + dedupe → processed/
+│   ├── feature_extractor/   # skills / level / mode → features/
+│   ├── loader/              # DQ gate + upsert → PostgreSQL star schema
+│   └── insights/            # refresh reporting MVs, trends, daily_insight + SNS
+├── sql/                     # PostgreSQL DDL: schema, reporting, trends, analytics
+├── athena/                  # lake DDL with partition projection (3 tiers)
 ├── infra/
-│   └── setup_aws.py        # Bootstrap script – S3 + EventBridge + notifications
-├── tests/
-│   └── test_pipeline_local.py  # 9 unit tests – runs locally, no AWS needed
-└── requirements.txt
+│   ├── setup_aws.py         # S3 + EventBridge + S3-notification wiring
+│   └── monitoring.py        # SNS + CloudWatch alarms + dashboard
+├── tests/                   # unit + integration (moto) + data-quality tests
+├── docs/                    # architecture, data model, runbook, interview prep, resume
+├── .github/workflows/       # ci.yml, deploy.yml
+├── Makefile  pyproject.toml  requirements*.txt  .env.example
 ```
 
 ---
 
 ## Quickstart
 
-### 1. Clone & install dependencies
 ```bash
 git clone https://github.com/jeeva-s0604/aws-job-market-pipeline.git
 cd aws-job-market-pipeline
-pip install -r requirements.txt
+make install          # dev dependencies
+make lint             # ruff lint + format check
+make test             # full test suite (no AWS / DB needed — moto + mocks)
+make cov              # tests with coverage report
+make package          # build deployment zips for every Lambda → build/
 ```
 
-### 2. Run local tests (no AWS credentials needed)
-```bash
-python -m pytest tests/test_pipeline_local.py -v
-```
+The pipeline runs locally end-to-end with **mock data** (no API key) and
+**moto-mocked S3** (no AWS account).
 
-### 3. Deploy to AWS
+### Deploy to AWS (Free-Tier)
 
-#### Prerequisites
-- AWS CLI configured (`aws configure`)
-- IAM role with: `s3:*`, `lambda:InvokeFunction`, `events:*`, `athena:*`
+1. **Bootstrap lake + schedules + S3 notifications**
+   ```bash
+   python infra/setup_aws.py --bucket my-job-pipeline --region ap-south-1 \
+     --ingestor-arn ... --transformer-arn ... --extractor-arn ... \
+     --loader-arn ... --insights-arn ...
+   ```
+2. **Create the PostgreSQL schema** (RDS `db.t4g.micro`)
+   ```bash
+   psql "$DATABASE_URL" -f sql/01_schema.sql -f sql/02_reporting.sql -f sql/03_trends.sql
+   ```
+3. **Register Athena tables** — run `athena/create_tables.sql` (replace `<YOUR_BUCKET>`).
+4. **Provision monitoring**
+   ```bash
+   python infra/monitoring.py --region ap-south-1 --email you@example.com
+   ```
+5. **CI/CD** — pushes run `ci.yml`; deploy via the manual `deploy.yml` (GitHub OIDC).
 
-#### Bootstrap infrastructure
-```bash
-python infra/setup_aws.py \
-  --bucket  your-job-pipeline-bucket \
-  --region  ap-south-1 \
-  --ingestor-arn    arn:aws:lambda:ap-south-1:ACCOUNT:function:job-ingestor \
-  --transformer-arn arn:aws:lambda:ap-south-1:ACCOUNT:function:job-transformer \
-  --extractor-arn   arn:aws:lambda:ap-south-1:ACCOUNT:function:job-feature-extractor
-```
-
-#### Deploy Lambdas (example using AWS CLI)
-```bash
-# Package and deploy each Lambda
-for fn in ingestor transformer feature_extractor; do
-  cd lambdas/$fn
-  pip install -r requirements.txt -t package/
-  cp handler.py package/
-  cd package && zip -r ../function.zip . && cd ..
-  aws lambda create-function \
-    --function-name job-$fn \
-    --runtime python3.12 \
-    --handler handler.lambda_handler \
-    --zip-file fileb://function.zip \
-    --role arn:aws:iam::ACCOUNT:role/lambda-execution-role \
-    --environment Variables="{S3_BUCKET_NAME=your-bucket,APIFY_API_TOKEN=your-token}" \
-    --timeout 180 \
-    --memory-size 256
-  cd ../..
-done
-```
-
-#### Set up Athena tables
-```bash
-# Run create_tables.sql in the Athena console
-# or via AWS CLI (replace <YOUR_BUCKET> first):
-aws athena start-query-execution \
-  --query-string file://athena/create_tables.sql \
-  --result-configuration OutputLocation=s3://your-bucket/athena-results/
-```
+Configuration lives in environment variables — see [`.env.example`](.env.example).
+DB credentials resolve from **AWS Secrets Manager** (`DB_SECRET_ARN`) in production.
 
 ---
 
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `S3_BUCKET_NAME` | `job-market-pipeline-raw` | Target S3 bucket |
-| `APIFY_API_TOKEN` | `""` | Apify API key (omit for mock data) |
-| `APIFY_ACTOR_ID` | `bebity~linkedin-jobs-scraper` | Apify actor |
-| `SEARCH_TERMS` | `Data Engineer,Junior Data Engineer,ETL Developer` | Comma-separated |
-| `LOCATIONS` | `India,Remote` | Comma-separated |
-| `MAX_RESULTS` | `100` | Max records per API call |
-| `FRESHNESS_DAYS` | `30` | Dedup rolling window |
-
----
-
-## Sample Athena Queries
+## Sample analytics
 
 ```sql
--- Top demanded skills this month
-SELECT skill, COUNT(*) AS demand_count
-FROM job_market_features
-CROSS JOIN UNNEST(skills) AS t(skill)
-WHERE year = '2025' AND month = '01'
-GROUP BY skill ORDER BY demand_count DESC LIMIT 10;
+-- Top skills (PostgreSQL serving layer)
+SELECT s.skill_name, COUNT(*) AS demand
+FROM fact_job_posting f
+JOIN bridge_job_skill b USING (job_id)
+JOIN dim_skill s USING (skill_id)
+GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 
--- Average salary by experience level
-SELECT experience_level, ROUND(AVG(salary_avg), 0) AS avg_salary, COUNT(*) AS jobs
-FROM job_market_features
-WHERE salary_avg IS NOT NULL
-GROUP BY experience_level ORDER BY avg_salary DESC;
+-- Median salary by experience level
+SELECT experience_level,
+       PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY salary_avg) AS median_salary
+FROM fact_job_posting WHERE salary_avg IS NOT NULL GROUP BY 1;
 ```
+
+More in [`sql/04_analytics_queries.sql`](sql/04_analytics_queries.sql) (lake
+equivalents in [`athena/create_tables.sql`](athena/create_tables.sql)).
 
 ---
 
-## Tech Stack
+## Engineering practices
 
-`Python 3.12` · `AWS Lambda` · `Amazon S3` · `Amazon EventBridge` · `Amazon Athena` · `Boto3` · `Apify`
+- **Idempotent** loads (`INSERT … ON CONFLICT`) + SHA-256 dedup → exactly-once
+  *effects* under at-least-once S3 delivery.
+- **Immutable raw** landing → fully reproducible reprocessing (re-trigger, never
+  re-scrape).
+- **Data quality as a gate**, with the pass rate exposed as an alarmable metric.
+- **Observability built in** — structured logs, custom metrics, alarms, dashboard.
+- **Tested**: unit (pure functions), integration (moto S3), and DQ tests; lint +
+  format enforced in CI.
+
+---
+
+## Tech stack
+
+`Python 3.12` · `SQL` · `PostgreSQL` · `AWS Lambda` · `Amazon S3` ·
+`Amazon EventBridge` · `Amazon Athena` · `AWS Secrets Manager` · `Amazon SNS` ·
+`Amazon CloudWatch` · `GitHub Actions` · `Boto3` · `psycopg2` · `pytest` ·
+`moto` · `Ruff`
+
+---
+
+## For recruiters & interviews
+
+- 📄 Resume bullets + LinkedIn description: [`docs/RESUME_LINKEDIN.md`](docs/RESUME_LINKEDIN.md)
+- 🎤 Interview prep (50 Data Engineering + 25 AWS + 25 SQL Q&A): [`docs/INTERVIEW_PREP.md`](docs/INTERVIEW_PREP.md)
 
 ---
 

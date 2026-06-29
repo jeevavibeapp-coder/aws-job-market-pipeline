@@ -10,3 +10,8 @@ sample_data/demo.db
 *.log
 .DS_Store
 *.pyc
+.coverage
+htmlcov/
+build/
+.pytest_cache/
+.ruff_cache/
