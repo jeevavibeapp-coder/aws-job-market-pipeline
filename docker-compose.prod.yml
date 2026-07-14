@@ -1,0 +1,42 @@
+# Production overrides — use with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Assumes managed Postgres (RDS) and Redis (ElastiCache); local postgres/redis services are not used.
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    restart: always
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+    volumes: []
+    ports:
+      - "8000:8000"
+
+  celery_worker:
+    command: celery -A app.workers.celery_app worker --loglevel=warning --concurrency=8 -Q default,scraping,scoring
+    restart: always
+    environment:
+      ENVIRONMENT: production
+    volumes: []
+
+  celery_beat:
+    restart: always
+    environment:
+      ENVIRONMENT: production
+    volumes: []
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    command: npm run start
+    restart: always
+    environment:
+      NODE_ENV: production
+    volumes: []
+    ports:
+      - "3000:3000"
