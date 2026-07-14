@@ -8,13 +8,14 @@ redis==5.0.1
 celery==5.3.6
 pydantic==2.5.3
 pydantic-settings==2.1.0
+email-validator==2.1.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 httpx==0.26.0
 openai==1.10.0
-anthropicai==0.17.0
-pypdf2==3.0.1
+anthropic==0.17.0
+PyPDF2==3.0.1
 python-docx==1.1.0
 scikit-learn==1.4.0
 numpy==1.26.3
