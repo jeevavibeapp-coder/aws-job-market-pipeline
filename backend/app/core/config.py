@@ -41,8 +41,13 @@ class Settings(BaseSettings):
     AWS_REGION: str = "ap-south-1"
     AWS_S3_BUCKET: str = "job-intelligence-resumes"
 
-    # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    # CORS — comma-separated string, parsed into a list via the property below.
+    # Kept as a plain str so pydantic-settings does not attempt JSON decoding.
+    CORS_ORIGINS: str = "http://localhost:3000"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
 
 @lru_cache

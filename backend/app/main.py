@@ -5,7 +5,6 @@ from fastapi.responses import JSONResponse
 import structlog
 
 from app.core.config import settings
-from app.core.database import engine, Base
 from app.api.v1.router import api_router
 
 log = structlog.get_logger()
@@ -29,7 +28,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
